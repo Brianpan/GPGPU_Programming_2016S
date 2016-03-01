@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstdlib>
+#include <cuda.h>
 #include "SyncedMemory.h"
 
 #define CHECK {\
@@ -10,10 +11,15 @@
 	}\
 }
 
-__global__ void SomeTransform(char *input_gpu, int fsize) {
+__global__ void ToUpperCaseTransform(char *input_gpu, int fsize) {
 	int idx = blockIdx.x * blockDim.x + threadIdx.x;
-	if (idx < fsize and input_gpu[idx] != '\n') {
-		input_gpu[idx] = '!';
+	if (idx < fsize and input_gpu[idx] != '\n' and input_gpu[idx]!=' ') {
+		int ansii_num = input_gpu[idx];
+		if(ansii_num >=97 && ansii_num <= 122){
+			ansii_num -= 32;
+			input_gpu[idx]= (char) ansii_num;
+		}
+		
 	}
 }
 
@@ -47,7 +53,11 @@ int main(int argc, char **argv)
 	// An example: transform the first 64 characters to '!'
 	// Don't transform over the tail
 	// And don't transform the line breaks
-	SomeTransform<<<2, 32>>>(input_gpu, fsize);
+ 	const int blkSize = 512; 
+	const int gdSize = (fsize/512)+1;
+	const dim3 blockSize(blkSize, 1, 1);
+	const dim3 gridSize(gdSize, 1, 1);
+	ToUpperCaseTransform<<<gridSize, blockSize>>>(input_gpu, fsize);
 
 	puts(text_smem.get_cpu_ro());
 	return 0;
