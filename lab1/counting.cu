@@ -50,10 +50,10 @@ __global__ void d_countPosition(int *pos, int *segment_tree, int text_size, int 
     if(idx >= text_size){return;}
     
     long int leaf_shifted = seg_tree_size/2;
-    //
+    //zero condition 
     if(segment_tree[leaf_shifted+idx] == 0){
     	pos[idx] = 0;
-	return;
+	    return;
     }else{
     	//naive n*k
     	// int word_posi = 1;
@@ -66,67 +66,60 @@ __global__ void d_countPosition(int *pos, int *segment_tree, int text_size, int 
         //segment tree approach n*(log k)
         //check node is even or odd
         //even start node should move to prev odd
-	int length = 1;
-	long int backtrace_id = idx; 
+	    int length = 1;
+	    int backtrace_id = idx; 
     	if(backtrace_id %2!= 0){
-		backtrace_id -= 1;
-		if(segment_tree[leaf_shifted + backtrace_id] == 0){
-			pos[idx] = length;
-			return; 	
-		}else{
-			length += 1;
-		}
-	}
+		    backtrace_id -= 1;
+		    if(segment_tree[leaf_shifted + backtrace_id] == 0){
+			    pos[idx] = length;
+			    return; 	
+		    }else{
+			    length += 1;
+		    }
+	    }
         //start up trace
-	long int max_up_trace = seg_tree_size;
-	int loop_iv = 2;
-	long int check_idx  = (leaf_shifted + backtrace_id)/2;
-	leaf_shifted /= 2;
-	do{
-		if(check_idx % 2!= 0){
-			if( segment_tree[check_idx -1]>=loop_iv){
-				length += loop_iv;
-			}else{
-				check_idx /= 2;
-				break;
-			} 	
-		}else if(check_idx %2 == 0 && check_idx == leaf_shifted){
-			break;
-		}else if(check_idx %2== 0){
-			//already case
-			
-		}
+    	int max_up_trace = 512;
+    	int loop_iv = 2;
+    	long int check_idx  = (leaf_shifted + backtrace_id)/2;
+    	leaf_shifted /= 2;
+    	do{
+    		if(check_idx % 2!= 0){
+    			if( segment_tree[check_idx -1]>=loop_iv){
+    				length += loop_iv;
+    			}else{
+    				break;
+    			} 	
+    		}else if(check_idx %2 == 0 && check_idx == leaf_shifted){
+    			break;
+    		}
 
-		check_idx /= 2;
-		loop_iv *= 2;
-		leaf_shifted /= 2;
-	}while(loop_iv <= max_up_trace);
+    		check_idx /= 2;
+    		loop_iv *= 2;
+    		leaf_shifted /= 2;
+    	}while(loop_iv <= max_up_trace);
+        
         //down trace if check_idx = 0
-	if(segment_tree[check_idx] == 0){
-		//move down one sibling
-		loop_iv /=2;
-		check_idx *=2;
-		//start trace
-		long int left_node;
-		long int right_node;
-		if(segment_tree[check_idx] > 0){
-			//length += segment_tree[check_idx];
-		}
-		else{
-			while(loop_iv > 0){
-				left_node = check_idx*2;
-				right_node = left_node + 1;
-				if(segment_tree[right_node] >= loop_iv){
-					length +=loop_iv;
-					check_idx *= 2; 
-				}else{
-					check_idx = check_idx*2 + 1;
-				}
-				loop_iv /= 2;
-			}
-		}
-	}	
-	pos[idx] = length;
+    	if(segment_tree[check_idx/2] == 0 && !(check_idx == leaf_shifted && segment_tree[check_idx] > 0)){
+    		//move down one sibling
+    		check_idx -= 1;
+    		//start trace
+    		long int left_node;
+    		long int right_node;
+
+    		if(segment_tree[check_idx] == 0){
+    			while(check_idx < seg_tree_size/2){
+    				left_node = check_idx*2;
+    				right_node = left_node + 1;
+    				if(segment_tree[right_node] > 0){
+    					length += segment_tree[right_node];
+    					check_idx *= 2; 
+    				}else{
+    					check_idx = check_idx*2 + 1;
+    				}
+    			}
+    		}
+    	}	
+    	    pos[idx] = length;
     }
     return;
 
@@ -141,7 +134,7 @@ void CountPosition(const char *text, int *pos, int text_size)
     int *d_segment_tree;
     cudaMalloc(&d_segment_tree, seg_tree_size*sizeof(int));
     
-    int blk_size = 32; 
+    int blk_size = 128; 
     while(pos_shifted > 0){
        //do __global__ set segment tree
        long long int grid_size = CeilDiv(to_build_siblings_size, blk_size);
@@ -154,13 +147,11 @@ void CountPosition(const char *text, int *pos, int text_size)
            buildSegTree<<<GRID_SIZE, BLK_SIZE>>>(pos_shifted, d_segment_tree);	
        }
        //update to parent for constructing parents
-       //printf("pos shift: %d ; sib size: %d \n", pos_shifted, to_build_siblings_size);
 
        pos_shifted = pos_shifted/2;
        to_build_siblings_size = pos_shifted;
        //sync device
        cudaDeviceSynchronize();
-       //break; 
     }
     
     //count position
@@ -169,30 +160,8 @@ void CountPosition(const char *text, int *pos, int text_size)
     dim3 GRID_SIZE(grid_size, 1, 1);
 
     d_countPosition<<<GRID_SIZE, BLK_SIZE>>>(pos, d_segment_tree, text_size, seg_tree_size);
-    
-    int *posi_ptr = (int *) malloc(sizeof(int)*text_size);
-    cudaMemcpy(posi_ptr, pos, sizeof(int)*text_size, cudaMemcpyDeviceToHost);
-    //for(int i = 0; i<512;i++){
-    //	if(i> 0&&posi_ptr[i] - posi_ptr[i-1] != 1){
-//		printf("%d:%d,", i, posi_ptr[i]);
-//    	}
-//    }
-//    printf("\n----512-----\n");
-//    for(int i = 512; i<1023; i++){
-//		if(i> 0&&posi_ptr[i] - posi_ptr[i-1] != 1){
-//			printf("%d:%d,", i, posi_ptr[i]);
-//		}
-//	}	
-//	printf("\n----\n");
-//    for(int i = 0; i<512; i++){
-//	printf("%d,", posi_ptr[i]);
-//	}
-//    printf("\n----512----\n");
-//    for(int i = 512; i< 1023; i++){
-//	printf("%d,", posi_ptr[i]);
-//	}
+
     //free memory
-//    free(posi_ptr);
     cudaFree(d_segment_tree);
     return;
 }
