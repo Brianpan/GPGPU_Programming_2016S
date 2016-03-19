@@ -42,48 +42,21 @@ __host__ int SegmentTreeSize(int text_size){
 	for(;s<text_size;s<<=1);
 	return s<<1;	
 }
-
-//segment tree find
-__device__ int combineNode(int leftNode, int rightNode){
-   if(leftNode == 0 || rightNode == 0){
-       return 0;	
-   }else{
-   	   return (leftNode+rightNode);
-   }	
-}
-__device__ int segment_tree_search(int tidx, int *segment_tree, int left, int right, int lf, int rh){
-    if(left == lf && right ==rh){
-        return segment_tree[tidx];
-    }
-    int mid = (left+right)/2;
-    int leftChild = tidx*2, rightChild = leftChild+1;
-
-    //include case
-    if(lf > mid){
-    	return segment_tree_search(rightChild, segment_tree, mid+1, right, lf, rh);
-    }else if (rh <= mid){
-    	return segment_tree_search(leftChild, segment_tree, left, mid, lf, rh);
-    }
-
-    int leftNode = segment_tree_search(leftChild, segment_tree, left, mid, lf, mid);
-    int rightNode = segment_tree_search(rightChild, segment_tree, mid+1, right, mid+1, rh);
-    //combine two
-    return combineNode(leftNode, rightNode);
-}
-
+    
 //count global
 __global__ void d_countPosition(int *pos, int *segment_tree, int text_size, int seg_tree_size){
-    long long int idx = blockIdx.x*blockDim.x + threadIdx.x;
+    long int idx = blockIdx.x*blockDim.x + threadIdx.x;
     //out of bound
     if(idx >= text_size){return;}
     
-    long long int leaf_shifted = seg_tree_size/2;
+    long int leaf_shifted = seg_tree_size/2;
     //
     if(segment_tree[leaf_shifted+idx] == 0){
     	pos[idx] = 0;
+	return;
     }else{
     	//naive n*k
-    	int word_posi = 1;
+    	// int word_posi = 1;
     	// long long int countdown_pivot = idx - 1;
      //    while(countdown_pivot >=0 && segment_tree[leaf_shifted+countdown_pivot] != 0){
      //        word_posi += 1;
@@ -91,26 +64,69 @@ __global__ void d_countPosition(int *pos, int *segment_tree, int text_size, int 
      //    }
      //    pos[idx] = word_posi;
         //segment tree approach n*(log k)
-        int max_length = 512;
-        int s = 1;
-        int base = 0;
-        int countdown_pivot = idx - (s+base);
-        while((s+base) <= max_length && countdown_pivot >=0){
-            int search_result = segment_tree_search(1, segment_tree, 0, seg_tree_size/2-1, countdown_pivot, idx-s-base);
-            if(search_result == 0){
-                base += s/2;
-                s = 1; 
-            }else{
-                s *= 2;
-                if(idx-(s+base) < 0){
-                    base += s/2;
-                    s = 1;
-                }
-            }
-            countdown_pivot = idx - (s+base);
+        //check node is even or odd
+        //even start node should move to prev odd
+	int length = 1;
+	long int backtrace_id = idx; 
+    	if(backtrace_id %2!= 0){
+		backtrace_id -= 1;
+		if(segment_tree[leaf_shifted + backtrace_id] == 0){
+			pos[idx] = length;
+			return; 	
+		}else{
+			length += 1;
+		}
+	}
+        //start up trace
+	long int max_up_trace = seg_tree_size;
+	int loop_iv = 2;
+	long int check_idx  = (leaf_shifted + backtrace_id)/2;
+	leaf_shifted /= 2;
+	do{
+		if(check_idx % 2!= 0){
+			if( segment_tree[check_idx -1]>=loop_iv){
+				length += loop_iv;
+			}else{
+				check_idx /= 2;
+				break;
+			} 	
+		}else if(check_idx %2 == 0 && check_idx == leaf_shifted){
+			break;
+		}else if(check_idx %2== 0){
+			//already case
+			
+		}
 
-        }
-        pos[idx] = base+1;
+		check_idx /= 2;
+		loop_iv *= 2;
+		leaf_shifted /= 2;
+	}while(loop_iv <= max_up_trace);
+        //down trace if check_idx = 0
+	if(segment_tree[check_idx] == 0){
+		//move down one sibling
+		loop_iv /=2;
+		check_idx *=2;
+		//start trace
+		long int left_node;
+		long int right_node;
+		if(segment_tree[check_idx] > 0){
+			//length += segment_tree[check_idx];
+		}
+		else{
+			while(loop_iv > 0){
+				left_node = check_idx*2;
+				right_node = left_node + 1;
+				if(segment_tree[right_node] >= loop_iv){
+					length +=loop_iv;
+					check_idx *= 2; 
+				}else{
+					check_idx = check_idx*2 + 1;
+				}
+				loop_iv /= 2;
+			}
+		}
+	}	
+	pos[idx] = length;
     }
     return;
 
@@ -146,20 +162,6 @@ void CountPosition(const char *text, int *pos, int text_size)
        cudaDeviceSynchronize();
        //break; 
     }
-
-    //int h_segment_tree[seg_tree_size];
-
-    // cudaMemcpy(h_segment_tree, d_segment_tree, 
-    // 	       seg_tree_size*sizeof(int),
-    // 	       cudaMemcpyDeviceToHost);
-     
-    // for(long long int i = seg_tree_size/2; i< (seg_tree_size/2+600); i=i+2){
-    //     printf("tree node %d  %d | nei : %d | parent node: %d | grandparent: %d \n",
-    //      i, h_segment_tree[i], h_segment_tree[i+1], h_segment_tree[i/2], h_segment_tree[i/4]);
-    // }
-
-    // printf("seg tree size %d \n", seg_tree_size);
-    // printf("text size %d\n", text_size);
     
     //count position
     int grid_size = CeilDiv(text_size, blk_size);
@@ -170,11 +172,27 @@ void CountPosition(const char *text, int *pos, int text_size)
     
     int *posi_ptr = (int *) malloc(sizeof(int)*text_size);
     cudaMemcpy(posi_ptr, pos, sizeof(int)*text_size, cudaMemcpyDeviceToHost);
-    for(int i = 0; i<500;i++){
-    	printf("%d,", posi_ptr[i]);
-    }
+    //for(int i = 0; i<512;i++){
+    //	if(i> 0&&posi_ptr[i] - posi_ptr[i-1] != 1){
+//		printf("%d:%d,", i, posi_ptr[i]);
+//    	}
+//    }
+//    printf("\n----512-----\n");
+//    for(int i = 512; i<1023; i++){
+//		if(i> 0&&posi_ptr[i] - posi_ptr[i-1] != 1){
+//			printf("%d:%d,", i, posi_ptr[i]);
+//		}
+//	}	
+//	printf("\n----\n");
+//    for(int i = 0; i<512; i++){
+//	printf("%d,", posi_ptr[i]);
+//	}
+//    printf("\n----512----\n");
+//    for(int i = 512; i< 1023; i++){
+//	printf("%d,", posi_ptr[i]);
+//	}
     //free memory
-    free(posi_ptr);
+//    free(posi_ptr);
     cudaFree(d_segment_tree);
     return;
 }
