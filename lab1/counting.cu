@@ -134,7 +134,7 @@ void CountPosition(const char *text, int *pos, int text_size)
     int *d_segment_tree;
     cudaMalloc(&d_segment_tree, seg_tree_size*sizeof(int));
     
-    int blk_size = 128; 
+    int blk_size = 256; 
     while(pos_shifted > 0){
        //do __global__ set segment tree
        long long int grid_size = CeilDiv(to_build_siblings_size, blk_size);
