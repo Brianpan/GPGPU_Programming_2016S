@@ -49,7 +49,7 @@ __global__ void d_countPosition(int *pos, int *segment_tree, int text_size, int 
     //out of bound
     if(idx >= text_size){return;}
     
-    long int leaf_shifted = seg_tree_size/2;
+    long int leaf_shifted = seg_tree_size>>1;
     //zero condition 
     if(segment_tree[leaf_shifted+idx] == 0){
     	pos[idx] = 0;
@@ -81,7 +81,7 @@ __global__ void d_countPosition(int *pos, int *segment_tree, int text_size, int 
     	int max_up_trace = 512;
     	int loop_iv = 2;
     	long int check_idx  = (leaf_shifted + backtrace_id)/2;
-    	leaf_shifted /= 2;
+    	leaf_shifted >>= 1;
     	do{
     		if(check_idx % 2!= 0){
     			if( segment_tree[check_idx -1]>=loop_iv){
@@ -93,9 +93,9 @@ __global__ void d_countPosition(int *pos, int *segment_tree, int text_size, int 
     			break;
     		}
 
-    		check_idx /= 2;
-    		loop_iv *= 2;
-    		leaf_shifted /= 2;
+    		check_idx >>= 1;
+    		loop_iv <<= 1;
+    		leaf_shifted >>= 1;
     	}while(loop_iv <= max_up_trace);
         
         //down trace if check_idx = 0
@@ -108,11 +108,11 @@ __global__ void d_countPosition(int *pos, int *segment_tree, int text_size, int 
 
     		if(segment_tree[check_idx] == 0){
     			while(check_idx < seg_tree_size/2){
-    				left_node = check_idx*2;
+    				left_node = check_idx << 1;
     				right_node = left_node + 1;
     				if(segment_tree[right_node] > 0){
     					length += segment_tree[right_node];
-    					check_idx *= 2; 
+    					check_idx <<= 1; 
     				}else{
     					check_idx = check_idx*2 + 1;
     				}
@@ -166,17 +166,48 @@ void CountPosition(const char *text, int *pos, int text_size)
     return;
 }
 
+struct filter_trans{
+    __host__ __device__ bool operator()(const int &pos){
+        return pos == 1;    
+    }
+};
+
+struct is_head_trans{
+    __host__ __device__ int operator()(const int &pos, const int &is_head){
+        return (pos*is_head - 1);
+    }
+};
+
+struct remove_minus_one_trans{
+    __host__ __device__ bool operator()(const int &pos){
+        return(pos >= 0);
+    }
+};
+
 int ExtractHead(const int *pos, int *head, int text_size)
 {
 	int *buffer;
 	int nhead;
 	cudaMalloc(&buffer, sizeof(int)*text_size*2); // this is enough
-	thrust::device_ptr<const int> pos_d(pos);
+	//use thrust pointer to manipulate thrust algorithms
+    thrust::device_ptr<const int> pos_d(pos);
 	thrust::device_ptr<int> head_d(head), flag_d(buffer), cumsum_d(buffer+text_size);
 
 	// TODO
+    // if 1 is 1 otherwise are 0
+    thrust::transform(pos_d, pos_d+text_size, flag_d,filter_trans());
+    //calculate count
+    nhead = thrust::count(flag_d, flag_d+text_size, 1);
+    
+    thrust::sequence(flag_d+text_size, flag_d+2*text_size, 1);
+    // multiply minus 1 is larger than 0 is answer
+    thrust::transform(flag_d+text_size, flag_d+2*text_size, flag_d, flag_d, is_head_trans());
+	
+    // copy to head_d
+    // manipulate the address in memory directly
+    thrust::copy_if(flag_d, flag_d+text_size, head_d, remove_minus_one_trans());
 
-	cudaFree(buffer);
+    cudaFree(buffer);
 	return nhead;
 }
 
