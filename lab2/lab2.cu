@@ -54,13 +54,41 @@ __global__ void perlinTransform(int t, int NFRAME, int width, int height, uint8_
 		return;
 	}	
 
-	double x = (double) posX / (double) width;
-	double y = (double) posY / (double) height;
+	double x = (double) (posX) / (double) width;
+	double y = (double) (posY) / (double) height;
 
-	double n = 20*pn.noise(x, y, 0.8);
-	n = n - floor(n);
+	
 
-	yuv[posY*width+posX] = floor(255*n);
+	double total = 0;
+	//wave transform
+	// total = cosf(8*(x+2*pn.noise(x, y, 100) + 15*t/NFRAME));
+	// total = cosf((x+pn.noise(x, y, t/4)));
+	
+	// double per = 0.25;
+	// int oct = 3; 
+	// for(int i = 0; i < oct; i++){
+	// 	int freq = powf(2, i);
+	// 	double amp = powf(per, i);
+	// 	int offsetX, offsetY;
+	// 	if(t%4 == 0){
+	// 		offsetX = 0;
+	// 		offsetY = 0;
+	// 	}else if(t%4==1){
+	// 		offsetX = 1;
+	// 		offsetY = 0;
+	// 	}else if(t%4 ==2){
+	// 		offsetX =1;
+	// 		offsetY =1;
+	// 	}else{
+	// 		offsetX = 0;
+	// 		offsetY = 1;
+	// 	}
+	// 	total += pn.noise((double) (posX)*(posY)*freq*t, (double) (posY)*freq*t, 1)*amp;
+
+	// }
+	//total = pn.noise(posX, posY, 0.8*t);
+	// total = total - floor(total);
+	yuv[posY*width+posX] = floor(255*total);
 
 	return;
 }
@@ -111,28 +139,57 @@ __device__ PerlinNoise::PerlinNoise(unsigned int seed){
 }
 
 __device__ double PerlinNoise::noise(double x, double y, double z){
+	//
 	int X = (int) floor(x) & 255;
 	int Y = (int) floor(y) & 255;
 	int Z = (int) floor(z) & 255;
-
+	
+	//trans to float point    
 	x -= floor(x);
 	y -= floor(y);
 	z -= floor(z);
 
+	//use for interpolate 
 	double u = fade(x);
 	double v = fade(y);
 	double w = fade(z);
 
 	// eight corners
-	int A = p[X] + Y;
-	int AA = p[A] + Z;
-	int AB = p[A+1] + Z;
-	int B = p[X+1] + Y;
-	int BA = p[B] + Z;
-	int BB = p[B+1] + Z;
-	// have to understand what's going on ??
-	double res = lerp(w, lerp(v, lerp(u, grad(p[AA], x, y, z), grad(p[BA], x-1, y, z)), lerp(u, grad(p[AB], x, y-1, z), grad(p[BB], x-1, y-1, z))),	lerp(v, lerp(u, grad(p[AA+1], x, y, z-1), grad(p[BA+1], x-1, y, z-1)), lerp(u, grad(p[AB+1], x, y-1, z-1),	grad(p[BB+1], x-1, y-1, z-1))));
+	double aaa = p[ p[p[X] + Y] + Z];
+	double aba = p[ p[p[X] + Y+1] + Z];
+	double baa = p[p[p[X+1] + Y] + Z];
+	double bba = p[p[p[X+1]+ Y+1] + Z];
 
+	double aab = p[p[p[X] + Y] + Z+1]; 
+	double abb = p[p[p[X] + Y+1] + Z+1];
+	double bab = p[p[p[X+1] + Y+1] + Z+1];
+	double bbb = p[p[p[X+1] + Y+1] + Z+1];
+
+	// 3d interpolate
+	double x1, x2, y1, y2, res;
+
+	// z=0 interpolate
+	x1 = lerp(grad(aaa, x, y, z),
+			  grad(baa, x-1, y, z),
+			  u);
+	x2 = lerp(grad(aba, x, y-1, z),
+			  grad(bba, x-1, y-1, z),
+			  u);
+	y1 = lerp(x1, x2, v);
+
+	// z=1 interpolate
+	x1 = lerp(grad(aab, x, y, z-1),
+			  grad(bab, x-1, y, z-1),
+			  u);
+	x2 = lerp(grad(abb, x, y-1, z-1),
+			  grad(bbb, x-1, y-1, z-1),
+			  u);
+	y2 = lerp(x1, x2, v);
+
+	//z index interpolate
+	res = lerp(y1, y2, w);
+	
+	//rescale to 0-1 
 	return (res+1.0)/2.0;
 
 }
@@ -145,7 +202,9 @@ __device__ double PerlinNoise::lerp(double t, double a, double b){
 	return a + (b-a) * t;
 }
 
+//random pick 12 gradient by hash int
 __device__ double PerlinNoise::grad(int hash, double x, double y, double z){
+	
 	int h = hash & 15;
 	double u = h < 8 ? x : y,
 		   v = h < 4 ? y : (h == 12 || h == 14 ? x : z);
