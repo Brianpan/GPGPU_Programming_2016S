@@ -61,33 +61,26 @@ __global__ void perlinTransform(int t, int NFRAME, int width, int height, uint8_
 
 	double total = 0;
 	//wave transform
-	// total = cosf(8*(x+2*pn.noise(x, y, 100) + 15*t/NFRAME));
+	total = cosf(4*(x+2*pn.noise(posX, posY, 100) + 15*t/NFRAME));
 	// total = cosf((x+pn.noise(x, y, t/4)));
 	
-	// double per = 0.25;
-	// int oct = 3; 
+	double per = 0.5;
+	int oct = 7; 
+	double total_amp = 0;
+
 	// for(int i = 0; i < oct; i++){
 	// 	int freq = powf(2, i);
 	// 	double amp = powf(per, i);
-	// 	int offsetX, offsetY;
-	// 	if(t%4 == 0){
-	// 		offsetX = 0;
-	// 		offsetY = 0;
-	// 	}else if(t%4==1){
-	// 		offsetX = 1;
-	// 		offsetY = 0;
-	// 	}else if(t%4 ==2){
-	// 		offsetX =1;
-	// 		offsetY =1;
-	// 	}else{
-	// 		offsetX = 0;
-	// 		offsetY = 1;
-	// 	}
-	// 	total += pn.noise((double) (posX)*(posY)*freq*t, (double) (posY)*freq*t, 1)*amp;
-
+		
+	// 	total += pn.noise((double) (posX)*freq, (double) (posY)*freq, t/10)*amp;
+		
+	// 	// for normalization
+	// 	total_amp += amp;
 	// }
-	//total = pn.noise(posX, posY, 0.8*t);
+	// total = pn.noise(x, y, 0.8)*20;
 	// total = total - floor(total);
+	
+	// total /= total_amp;
 	yuv[posY*width+posX] = floor(255*total);
 
 	return;
@@ -188,6 +181,11 @@ __device__ double PerlinNoise::noise(double x, double y, double z){
 
 	//z index interpolate
 	res = lerp(y1, y2, w);
+	
+	//horizonal interpolate
+	// res = lerp(grad(aaa, x, y, z),
+	// 		  grad(baa, x-1, y, z),
+	// 		  u);
 	
 	//rescale to 0-1 
 	return (res+1.0)/2.0;
