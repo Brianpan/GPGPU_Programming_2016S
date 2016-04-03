@@ -48,6 +48,8 @@ __global__ void perlinTransform(int t, int NFRAME, int width, int height, uint8_
 	int posX = thread_2d_pos.x;
 	int posY = thread_2d_pos.y;
 
+	double PI = 3.1415926;
+
 	PerlinNoise pn(d_p);
 	
 	if(posX >= width || posY >= height){
@@ -60,29 +62,45 @@ __global__ void perlinTransform(int t, int NFRAME, int width, int height, uint8_
 	
 
 	double total = 0;
-	//wave transform
-	total = cosf(4*(x+2*pn.noise(posX, posY, 100) + 15*t/NFRAME));
-	// total = cosf((x+pn.noise(x, y, t/4)));
 	
-	double per = 0.5;
-	int oct = 7; 
-	double total_amp = 0;
+	//wave transform
+	// slide x+y in sinf
+	// total = 10*sinf(12*(2*y+2*pn.noise(posX, posY, 90) + 25*t/NFRAME));
+	
+	//ripple
+	total = 10*sinf(12*(y*y+x*x+2*pn.noise(posX, posY, 90) + 25*t/NFRAME));
+	total = total - floor(total);
 
+	// double per = 0.3;
+	// int oct = 1; 
+	// double total_amp = 0;
+    
 	// for(int i = 0; i < oct; i++){
 	// 	int freq = powf(2, i);
-	// 	double amp = powf(per, i);
+	// 	double amp = powf(per, i+1);
 		
-	// 	total += pn.noise((double) (posX)*freq, (double) (posY)*freq, t/10)*amp;
+	// 	total += pn.noise((x*1.2+0.3)*freq, (y*1.2+0.3)*freq, 0)*amp;
 		
 	// 	// for normalization
 	// 	total_amp += amp;
 	// }
-	// total = pn.noise(x, y, 0.8)*20;
-	// total = total - floor(total);
-	
 	// total /= total_amp;
+	
+	// wood like 
+	//total = pn.noise(x, y, t/12)*20;
+	//total = total - floor(total);
+	
+	//
+	
+	
 	yuv[posY*width+posX] = floor(255*total);
-
+	
+	if((posY*width+posX)%4 == 0){
+		yuv[(posY*width+posX)/4+W*H] = float(255*total);
+		yuv[(posY*width+posX)/4+5/4*W*H] = float(255*total);
+		// yuv[(posY*width+posX)/4+W*H] = 128;
+		// yuv[(posY*width+posX)/4+5/4*W*H] = 128;
+	}
 	return;
 }
 
@@ -112,7 +130,7 @@ void Lab2VideoGenerator::Generate(uint8_t *yuv) {
 	cudaMemcpy(d_p_arr, h_p_arr, sizeof(int)*512, cudaMemcpyHostToDevice);
 
 	perlinTransform<<<gridSize, blockSize>>>(impl->t, NFRAME, W, H, yuv, d_p_arr);
-	cudaMemset(yuv+W*H, 128, W*H/2);
+	//cudaMemset(yuv+W*H, 128, W*H/2);
 	++(impl->t);
 	
 	//release
@@ -181,11 +199,6 @@ __device__ double PerlinNoise::noise(double x, double y, double z){
 
 	//z index interpolate
 	res = lerp(y1, y2, w);
-	
-	//horizonal interpolate
-	// res = lerp(grad(aaa, x, y, z),
-	// 		  grad(baa, x-1, y, z),
-	// 		  u);
 	
 	//rescale to 0-1 
 	return (res+1.0)/2.0;
