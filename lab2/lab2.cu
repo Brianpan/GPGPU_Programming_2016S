@@ -65,10 +65,10 @@ __global__ void perlinTransform(int t, int NFRAME, int width, int height, uint8_
 	
 	//wave transform
 	// slide x+y in sinf
-	// total = 10*sinf(12*(2*y+2*pn.noise(posX, posY, 90) + 25*t/NFRAME));
+	total = 10*sinf(12*(2*y+2*pn.noise(posX, posY, 90) + 25*t/NFRAME));
 	
 	//ripple
-	total = 10*sinf(12*(y*y+x*x+2*pn.noise(posX, posY, 90) + 25*t/NFRAME));
+	// total = 10*sinf(12*(y*y+x*x+2*pn.noise(posX, posY, 90) + 25*t/NFRAME));
 	total = total - floor(total);
 
 	// double per = 0.3;
