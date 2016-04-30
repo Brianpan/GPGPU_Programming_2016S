@@ -9,6 +9,8 @@ lab3.o:
 pgm.o:
 	gcc -O -c -std=c++11 pgm.cpp -o pgm.o
 clean:
-	rm ans.exe lab3.o
+	rm ans.exe lab3.o pgm.o  result.*
 exec:
-	./ans.exe img_background.ppm img_target.ppm img_mask.pgm 0 0 ./result.ppm
+	./ans.exe img_background.ppm img_target.ppm img_mask.pgm 100 100 ./result.ppm
+convert:
+	convert result.ppm result.png
