@@ -1,6 +1,6 @@
 NVCC=nvcc
 CUDA_INCLUDEPATH=/usr/local/cuda-7.5/include
-EXE=ans.exe
+EXE=a.out
 
 all: lab3.o pgm.o
 	$(NVCC) -std=c++11 -arch=sm_30 -O2 main.cu lab3.o pgm.o -o $(EXE)
@@ -9,8 +9,8 @@ lab3.o:
 pgm.o:
 	gcc -O -c -std=c++11 pgm.cpp -o pgm.o
 clean:
-	rm ans.exe lab3.o pgm.o  result.*
+	rm a.out lab3.o pgm.o  output.*
 exec:
-	./ans.exe img_background.ppm img_target.ppm img_mask.pgm 100 100 ./result.ppm
+	./a.out img_background.ppm img_target.ppm img_mask.pgm 130 600 ./output.ppm
 convert:
-	convert result.ppm result.png
+	convert output.ppm output.png

@@ -70,9 +70,6 @@ __global__ void CalculateFixed(
       int t_curt = t_y_tmp*wt + t_x_tmp;
       
       if(t_x_tmp >= 0 and t_x_tmp < wt and t_y_tmp >= 0 and t_y_tmp < ht){
-        // add number of neighbor
-        
-
         // 3 dim target
         fixed[curt*3 + 0] -= target[t_curt*3 + 0];
         fixed[curt*3 + 1] -= target[t_curt*3 + 1];
@@ -184,8 +181,6 @@ void PoissonImageCloning(
                  wb, hb, wt, ht, oy, ox);
   cudaDeviceSynchronize();
 
-  // poisson initialized x = 0
-  // cudaMemset(buf1, 0, 3*sizeof(float)*wt*ht);
   cudaMemset(buf2, 0, 3*sizeof(float)*wt*ht);
   cudaMemcpy(buf1, target, sizeof(float)*3*wt*ht, cudaMemcpyDeviceToDevice);
 
