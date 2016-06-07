@@ -12,9 +12,10 @@
 #include <helper_cuda.h>
 #include <cuComplex.h>
 #include <cufft.h>
+#include <curand.h>
 
-#define SIGSIZE 5
-#define SIGDIM 1
+#define SIGSIZE 7
+#define SIGDIM 2
 #define NBLK 256
 #define TIMESLOT 439
 //exp i
@@ -34,6 +35,45 @@ __global__ void fft_polar_angle(cufftComplex *data, float *angle, float *mag, in
 	angle[idx] = angle_trans(data[idx]);
 	return;
 }
+
+// do p(2:N)=[p1 -flipud(p1)];
+__global__ void surr_trans(float *angle, float *ran, int data_size, int sig_size, int half_sig_size){
+	int idx = threadIdx.x + blockDim.x*blockIdx.x;
+	if(idx >= data_size){
+		return;
+	}
+	
+	int data_col = idx/sig_size;
+	int data_idx = idx%sig_size;
+	// p(1) is not necessary for changing
+	if(data_idx ==0){
+		return;
+	}
+	
+	int half_idx;
+	//p(2: 2+half-1)
+	if(data_idx <= half_sig_size){
+		half_idx = (data_idx-1) + data_col*half_sig_size;
+		angle[idx] = ran[half_idx];
+			
+	// -flipup(p1)	
+	}else{
+		int diff = data_idx - half_sig_size;
+		int reverse_data_idx = half_sig_size- diff;
+		half_idx = reverse_data_idx + data_col*half_sig_size;
+		angle[idx] = -ran[half_idx];
+	}
+
+	return;
+
+}
+
+struct pi_mul_trans{
+	__host__ __device__ float operator()(const float &ran_val){
+		// float pi = 3.14159;
+		return 2*3.14159*ran_val;
+	}
+};
 
 int main(int argc, char **argv)
 {	
@@ -70,31 +110,69 @@ int main(int argc, char **argv)
 
 	fft_polar_angle<<<(data_size+NBLK-1)/NBLK, NBLK>>>(d_signal, d_angle, d_mag, data_size);
 
+	// start parallel surrogate
+	int half_col_size = SIGSIZE/2;
+	int half_size = half_col_size*SIGDIM;
+	float *d_ran_series, *d_temp;
+	checkCudaErrors(cudaMalloc(&d_ran_series, sizeof(float)*half_size));
+	checkCudaErrors(cudaMalloc(&d_temp, sizeof(float)*half_size));
+	if(SIGSIZE%2==0){
+
+	}else{
+		//random generator
+		curandGenerator_t gen;
+		curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT);
+		curandSetPseudoRandomGeneratorSeed(gen, 1234ULL);
+		curandGenerateUniform(gen, d_ran_series, half_size);
+
+		thrust::device_ptr<float> ran_ptr(d_ran_series);
+
+		//transform rand*2*pi
+		thrust::device_ptr<float> temp(d_temp);
+		thrust::transform(ran_ptr, ran_ptr+half_size*sizeof(float),
+						  temp, pi_mul_trans());
+		float *h_ran = (float *) malloc(half_size*sizeof(float));
+		float *h_tmp = (float *) malloc(half_size*sizeof(float));
+		checkCudaErrors(cudaMemcpy(h_ran, d_ran_series, half_size*sizeof(float), cudaMemcpyDeviceToHost));
+		checkCudaErrors(cudaMemcpy(h_tmp, d_temp, half_size*sizeof(float), cudaMemcpyDeviceToHost));
+
+		for(int i = 0; i< half_size; i ++){
+			printf("ran: %f pi: %f \n", h_ran[i], h_tmp[i]);
+		}
+		// do column vector trans p(2:N)=[p1 -flipud(p1)];
+		surr_trans<<<(data_size+NBLK-1)/NBLK, NBLK>>>(d_angle, d_temp, data_size, SIGSIZE, half_col_size);
+		free(h_ran);
+		free(h_tmp);
+	}
+
 	float *h_angle = (float *) malloc(sizeof(float)*data_size);
-	float *h_mag = (float *) malloc(sizeof(float)*data_size);
+	// float *h_mag = (float *) malloc(sizeof(float)*data_size);
 
 	checkCudaErrors(cudaMemcpy(h_angle, d_angle, sizeof(float)*data_size, cudaMemcpyDeviceToHost));
-	checkCudaErrors(cudaMemcpy(h_mag, d_mag, sizeof(float)*data_size, cudaMemcpyDeviceToHost));
+	// checkCudaErrors(cudaMemcpy(h_mag, d_mag, sizeof(float)*data_size, cudaMemcpyDeviceToHost));
 
 	// backward transform
 	// printf("---Inverse fft transform --- \n");
 	// cufftExecC2C(plan, d_signal, d_signal, 
 							   // CUFFT_INVERSE);
 	
-	cufftComplex *h_inverse_signal = (cufftComplex *) malloc(sizeof(cufftComplex)*SIGDIM*SIGSIZE);
-	checkCudaErrors(cudaMemcpy(h_inverse_signal, d_signal, mem_size, cudaMemcpyDeviceToHost));
+	// cufftComplex *h_inverse_signal = (cufftComplex *) malloc(sizeof(cufftComplex)*SIGDIM*SIGSIZE);
+	// checkCudaErrors(cudaMemcpy(h_inverse_signal, d_signal, mem_size, cudaMemcpyDeviceToHost));
 
-	for(int i = 0; i < SIGSIZE*SIGDIM; i ++){
-		if(i%SIGSIZE == 0){
-			printf("---- column %d started ---- \n", i/SIGSIZE+1);
-		}
-		printf("before: %f , %f ; after: %f , %f ; angle: %f ; mag: %f \n",
-				h_signal[i].x, h_signal[i].y,
-				h_inverse_signal[i].x, h_inverse_signal[i].y, 
-				h_angle[i], h_mag[i]);
-	}
+	// for(int i = 0; i < SIGSIZE*SIGDIM; i ++){
+	// 	if(i%SIGSIZE == 0){
+	// 		printf("---- column %d started ---- \n", i/SIGSIZE+1);
+	// 	}
+	// 	printf("angle: %f \n", h_angle[i]);
+	// 	// printf("before: %f , %f ; after: %f , %f ; angle: %f ; mag: %f \n",
+	// 	// 		h_signal[i].x, h_signal[i].y,
+	// 	// 		h_inverse_signal[i].x, h_inverse_signal[i].y, 
+	// 	// 		h_angle[i], h_mag[i]);
+	// }
 
 	free(h_signal);
+	// free(h_angle);
+	
 	// free(h_inverse_signal);
 	
 	cufftDestroy(plan);
