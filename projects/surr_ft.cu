@@ -6,6 +6,7 @@
 #include "Timer.h"
 
 #include <thrust/scan.h>
+#include <thrust/sort.h>
 #include <thrust/transform.h>
 #include <thrust/functional.h>
 #include <thrust/device_ptr.h>
@@ -16,11 +17,12 @@
 #include <cufft.h>
 #include <curand.h>
 
-#define SIGSIZE 440
+#define SIGSIZE 439
 #define SIGDIM 10000
 #define NBLK 256
 #define TIMESLOT 439
 #define pi 3.14159
+
 __device__ float angle_trans(const cuComplex& z){
 	return atan2(cuCimagf(z), cuCrealf(z));
 }
@@ -67,7 +69,6 @@ __global__ void odd_surr_trans(float *angle, float *ran, int data_size, int sig_
 	}
 
 	return;
-
 }
 
 __global__ void even_surr_trans(float *angle, float *mag, float *ran, int data_size, int sig_size, int half_sig_size){
@@ -209,7 +210,9 @@ void phaseran(float *result, const int data_num, const int time_size){
 		// do column vector trans p(2:N)=[p1 -flipud(p1)];
 		odd_surr_trans<<<(data_size+NBLK-1)/NBLK, NBLK>>>(d_angle, d_ran_series, data_size, time_size, half_col_size);
 	}
+
 	checkCudaErrors(cudaFree(d_ran_series));
+	curandDestroyGenerator(gen);
 	
 	// multiply with m.*exp(i*p) = m*cos(p) + m*i*sin(p)
 	cufftComplex *d_i_mul;
@@ -238,25 +241,82 @@ void phaseran(float *result, const int data_num, const int time_size){
 	return;
 }
 
+// sort self-defined function
+// struct col_sort_functor{
+// 	/* data */
+// 	int viewers, randomNum;
+// 	float *data;
+// 	col_sort_functor(int _viewers, int _randomNum, float *_data) : viewers(_viewers), randomNum(_randomNum), data(_data){} 
+
+// 	__host__ __device__
+// };
+// sort by time points
+void sortData(float *data, const int viewers, const int randomNum, const int timePoints){
+	float *d_tmp_data;
+	int total_size = viewers*randomNum*timePoints;
+	checkCudaErrors(cudaMalloc(&d_tmp_data, sizeof(float)*total_size));
+	checkCudaErrors(cudaMemcpy(d_tmp_data, data, sizeof(float)*total_size, cudaMemcpyDeviceToDevice));
+	
+	thrust::device_ptr<float> data_ptr(data);
+	
+	for(int i = 0 ; i < viewers*randomNum ; i ++){
+		int time_size = timePoints;
+		thrust::sort(data_ptr+i*time_size, data_ptr+(i+1)*time_size);	
+	}
+	// thrust::sort(data_ptr, data_ptr+viewers*randomNum*timePoints, col_sort_functor(viewers, randomNum, data));
+
+	checkCudaErrors(cudaFree(d_tmp_data));
+	return;
+}
+
+// aaft : cudaPointer return value
+// data : cudaPointer input data subjects (with several viewers)
+// viewers : # of viewers in data
+// randomNum : # of random series
+// timePoints :  # of time slots
+void amplitudeAdjustedFourierTransform(double *d_aaft, const double *d_data, const int viewers, const int randomNum, const int timePoints) {
+	// generate normal random variables
+	int total_size = viewers*randomNum*timePoints;
+	float *d_normal;
+	checkCudaErrors(cudaMalloc(&d_normal, sizeof(float)*total_size));
+	// generator 
+	curandGenerator_t gen;
+	curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT);
+	curandSetPseudoRandomGeneratorSeed(gen, rand()%10000);
+	curandGenerateNormal(gen, d_normal, total_size, 0, 1);
+	curandDestroyGenerator(gen);
+	// sort d_normal
+	sortData(d_normal, viewers, randomNum, timePoints);
+	
+	checkCudaErrors(cudaFree(d_normal));
+	return;
+}
+
 int main(int argc, char **argv)
 {	
-	float *result = (float *)malloc(sizeof(float)*SIGSIZE*SIGDIM);	
+	//phaseran(result, SIGDIM, SIGSIZE);
+	int viewers = 5;
+	double *result = (double *)malloc(sizeof(double)*SIGSIZE*SIGDIM*viewers);	
 	Timer phaseran_timer;
 	phaseran_timer.Start();
 	for(int i = 0; i <1 ; i++){
 
-		for(int i = 0; i<SIGSIZE*SIGDIM;i++){
+		for(int i = 0; i<viewers*SIGSIZE*SIGDIM;i++){
 			result[i] = i;
 		}
-	
-		phaseran(result, SIGDIM, SIGSIZE);
+		double *d_result;
+		cudaMalloc(&d_result, sizeof(double)*viewers*SIGSIZE*SIGDIM);
+		cudaMemcpy(d_result, result, sizeof(double)*viewers*SIGSIZE*SIGDIM, cudaMemcpyHostToDevice);
+		
+		double *db_result;
+		cudaMalloc(&db_result, sizeof(double)*viewers*SIGSIZE*SIGDIM);
 
-		// for(int i = 0; i< SIGSIZE*SIGDIM;i++){
-		// 	if(i%SIGSIZE==0){
-		// 		printf("---- data num %d started-----\n", i/SIGSIZE);
-		// 	}
-		// 	printf("phaseran: %f \n", result[i]);
-		// }
+		amplitudeAdjustedFourierTransform(db_result, d_result, viewers, SIGDIM, SIGSIZE);
+		// sortData(d_result, viewers, SIGDIM, SIGSIZE);
+		cudaMemcpy(result, d_result, sizeof(double)*viewers*SIGSIZE*SIGDIM, cudaMemcpyDeviceToHost);
+
+		cudaFree(d_result);
+		cudaFree(db_result);
 		
 	}
 	phaseran_timer.Pause();
