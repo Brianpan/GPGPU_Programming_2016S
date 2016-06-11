@@ -246,61 +246,119 @@ void phaseran(float *result, const int data_num, const int time_size){
 	cudaDeviceReset();
 	return;
 }
+// for thrust::generate's generator
+int generator_mod_pivot = 0;
+int generator_time_points = 0;
 
-// sort by time points
-// __global__ void thrust_sort(float *data, const int viewers, const int randomNum, const int timePoints){
-// 	int idx = threadIdx.x + blockDim.x*blockIdx.x;
-// 	if(idx >= viewers*randomNum){
-// 		return;
-// 	}
-// 	thrust::sort(thrust::seq, data+idx*timePoints, data+(idx+1)*timePoints);	
-	
-// 	return;
-// }
-int mod_pivot = 0;
 int mod_fuc(){
-	return (mod_pivot++)/SIGSIZE;
+	return (generator_mod_pivot++)/generator_time_points;
 }
 
-void sortData(float *data, const int viewers, const int randomNum, const int timePoints){
-	// float *d_tmp_data;
+template<class DataType>
+void sortData(DataType *data, const int viewers, const int randomNum, const int timePoints){
+
 	int total_size = viewers*randomNum*timePoints;
-	// checkCudaErrors(cudaMalloc(&d_tmp_data, sizeof(float)*total_size));
-	// checkCudaErrors(cudaMemcpy(d_tmp_data, data, sizeof(float)*total_size, cudaMemcpyDeviceToDevice));
-	
-	// thrust::device_ptr<float> data_ptr(data);
-	// thrust_sort<<<(viewers*randomNum+NBLK-1)/NBLK, NBLK>>>(data, viewers, randomNum, timePoints);
-	// for(int i = 0 ; i < viewers*randomNum ; i ++){
-	// 	int time_size = timePoints;
-	// }
-	// thrust::sort(data_ptr, data_ptr+viewers*randomNum*timePoints, col_sort_functor(viewers, randomNum, data));
-
-
 	// sort by key implement
-	//vectorized sort
+	// vectorized sort
 	thrust::host_vector<int> h_rank(total_size);
+	
+	// initialize # of randomNum pivot
+	generator_mod_pivot = 0;
 	thrust::generate(h_rank.begin(), h_rank.end(), mod_fuc);
   	thrust::device_vector<int> d_rank = h_rank;
-  	thrust::device_ptr<float> d_result = thrust::device_pointer_cast(data);
-  	thrust::device_vector<float> d_ori(d_result, d_result+total_size);
-  	thrust::device_vector<float> d_v_result(d_result, d_result+total_size);
+  	thrust::device_ptr<DataType> d_result = thrust::device_pointer_cast(data);
+  	// pointer to vector
+  	thrust::device_vector<DataType> d_v_result(d_result, d_result+total_size);
   	  
   	thrust::stable_sort_by_key(d_v_result.begin(), d_v_result.end(), d_rank.begin());
   	thrust::stable_sort_by_key(d_rank.begin(), d_rank.end(), d_v_result.begin());
+  	
   	cudaDeviceSynchronize();
 
-  	float *raw_ptr = thrust::raw_pointer_cast(d_v_result.data());
-  	checkCudaErrors(cudaMemcpy(data, raw_ptr, total_size*sizeof(float), cudaMemcpyDeviceToDevice));
+  	// thrust::host_vector<DataType> h_rr = d_v_result;
+  	// thrust::device_ptr<DataType> d_poo = thrust::device_pointer_cast(data);
+  	// thrust::device_vector<DataType> d_oo(d_poo, d_poo+total_size);
+  	// thrust::host_vector<DataType> h_oo = d_oo;
+
+  	// for(int i=0;i<2*timePoints;i++){
+  	// 	if (i%timePoints==0)
+  	// 	{
+  	// 		printf("------\n");
+  	// 	}
+  	// 	printf("ori: %f; sort: %f \n", h_oo[i], h_rr[i]);
+  	// } 
+
+  	DataType *raw_ptr = thrust::raw_pointer_cast(d_v_result.data());
+  	checkCudaErrors(cudaMemcpy(data, raw_ptr, total_size*sizeof(DataType), cudaMemcpyDeviceToDevice));
 	
-	// thrust::host_vector<float> h_sort = d_v_result;
-	// thrust::host_vector<float> h_data = d_ori;
-	// for(int i = 0;i < total_size; i++){
-	// 	if(i%timePoints == 0){
-	// 		printf("-------\n");
-	// 	}
-	// 	printf("raw: %f sorted: %f \n", h_data[i], h_sort[i]);
-	// } 
 	return;
+}
+// get sort self-defined functions
+struct sort_int2{
+	__host__ __device__ bool operator()(const int2 &lhs, const int2 &rhs) const{
+		return (lhs.x < rhs.x);  
+	}
+};
+struct trans_1d{
+	__host__ __device__ int operator()(const int2 &x) const{
+		return x.y;
+	}
+};
+
+struct trans_2d{
+	int timePoints;
+	trans_2d(int _timePoints) : timePoints(_timePoints){}
+
+	__host__ __device__ int2 operator()(const int &idx) const{
+		int rand_pivot = idx/timePoints;
+		int init_posi = idx%timePoints+1;
+		int2 temp = make_int2(rand_pivot, init_posi);
+
+		return temp;
+	}
+};
+// get sort rank in *rank
+template<class DataType>
+void getSortRank(int *rank, DataType *data, const int viewers, const int randomNum, const int timePoints){
+	int total_size = viewers*randomNum*timePoints;
+	
+	// do rank
+	thrust::device_vector<int2> d_rank(total_size);
+	
+	generator_mod_pivot = 0;
+	// generate key
+	thrust::device_vector<int> d_prep(total_size);
+	thrust::sequence(d_prep.begin(), d_prep.end());
+	thrust::transform(d_prep.begin(), d_prep.end(), d_rank.begin(), trans_2d(timePoints));
+	
+	// start get rank
+	thrust::device_ptr<DataType> d_result = thrust::device_pointer_cast(data);
+	thrust::device_vector<DataType> d_v_result(d_result, d_result+total_size);
+
+	thrust::stable_sort_by_key(d_v_result.begin(), d_v_result.end(), d_rank.begin());
+	thrust::stable_sort_by_key(d_rank.begin(), d_rank.end(), d_v_result.begin(), sort_int2());	
+
+  	// do transform and copy back
+  	thrust::device_vector<int> d_rank_ans(total_size);
+  	thrust::transform(d_rank.begin(), d_rank.end(), d_rank_ans.begin(), trans_1d());
+	checkCudaErrors(cudaMemcpy(rank, d_rank_ans.data().get(), sizeof(int)*total_size, cudaMemcpyDeviceToDevice));
+
+
+	//	test correctness
+	// thrust::host_vector<int> h_rank_ans=d_rank_ans;
+	
+	// thrust::host_vector<DataType> h_rr = d_v_result;
+ //  	thrust::device_ptr<DataType> d_poo = thrust::device_pointer_cast(data);
+ //  	thrust::device_vector<DataType> d_oo(d_poo, d_poo+total_size);
+ //  	thrust::host_vector<DataType> h_oo = d_oo;
+	// for(int i=0;i<2*timePoints;i++){
+ //  		if (i%timePoints==0)
+ //  		{
+ //  			printf("------\n");
+ //  		}
+ //  		printf("ori: %f; sort: %f; ori_rank: %d \n", h_oo[i], h_rr[i], h_rank_ans[i]);
+ //  	} 
+  	return;
 }
 
 // aaft : cudaPointer return value
@@ -310,6 +368,7 @@ void sortData(float *data, const int viewers, const int randomNum, const int tim
 // timePoints :  # of time slots
 void amplitudeAdjustedFourierTransform(double *d_aaft, const double *d_data, const int viewers, const int randomNum, const int timePoints) {
 	// generate normal random variables
+	generator_time_points = timePoints;
 	int total_size = viewers*randomNum*timePoints;
 	float *d_normal;
 	checkCudaErrors(cudaMalloc(&d_normal, sizeof(float)*total_size));
@@ -320,9 +379,14 @@ void amplitudeAdjustedFourierTransform(double *d_aaft, const double *d_data, con
 	curandGenerateNormal(gen, d_normal, total_size, 0, 1);
 	curandDestroyGenerator(gen);
 	// sort d_normal
-	sortData(d_normal, viewers, randomNum, timePoints);
+	// sortData(d_normal, viewers, randomNum, timePoints);
+	int *d_rank;
+	checkCudaErrors(cudaMalloc(&d_rank, sizeof(int)*total_size));
+
+	getSortRank(d_rank, d_normal, viewers, randomNum, timePoints);
 	
 	checkCudaErrors(cudaFree(d_normal));
+	checkCudaErrors(cudaFree(d_rank));
 	return;
 }
 
@@ -335,12 +399,8 @@ int main(int argc, char **argv)
 	phaseran_timer.Start();
 	for(int i = 0; i <1 ; i++){
 
-		for(int i = 0; i<viewers*SIGSIZE*SIGDIM;i++){
-			// if(i%SIGSIZE==0){
-			// 	printf("---data %d:----\n", i/SIGSIZE);
-			// }
+		for(int i = 0; i<viewers*SIGSIZE*SIGDIM;i++){			
 			result[i] = (double) rand()/RAND_MAX;
-			// printf("rand: %f\n", result[i]);
 		}
 		double *d_result;
 		cudaMalloc(&d_result, sizeof(double)*viewers*SIGSIZE*SIGDIM);
@@ -350,15 +410,7 @@ int main(int argc, char **argv)
 		cudaMalloc(&db_result, sizeof(double)*viewers*SIGSIZE*SIGDIM);
 
 		amplitudeAdjustedFourierTransform(db_result, d_result, viewers, SIGDIM, SIGSIZE);
-		// sortData(d_result, viewers, SIGDIM, SIGSIZE);
 		cudaMemcpy(result, d_result, sizeof(double)*viewers*SIGSIZE*SIGDIM, cudaMemcpyDeviceToHost);
-
-		// for(int i = 0; i <viewers*SIGSIZE*SIGDIM;i++){
-		// 	if(i%SIGSIZE==0){
-		// 		printf("---!!data %d:----\n", i/SIGSIZE);
-		// 	}
-		// 	printf("sorted:%f \n", result[i]);
-		// }
 		
 		cudaFree(d_result);
 		cudaFree(db_result);

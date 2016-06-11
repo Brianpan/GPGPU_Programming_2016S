@@ -10,7 +10,7 @@
 #include <iostream>
 #include <stdlib.h>
 #define VIEWERS 5
-#define NSORTS 449
+#define NSORTS 2
 #define DSIZE 10
 
 int my_mod_start = 0;
@@ -72,9 +72,21 @@ int main(){
   thrust::device_vector<int> d_segments = h_segments;
   mytime = dtime_usec(0);
   thrust::stable_sort_by_key(d_result2.begin(), d_result2.end(), d_segments.begin());
+  
+  thrust:: host_vector<int> h_rank = d_segments;
+  thrust:: host_vector<float> h_dd = d_result2;
+  for(int i = 0; i < DSIZE*NSORTS; i ++){
+    if(i%DSIZE==0){
+      printf("------\n");
+    }
+    printf("---key: %f rank: %d ---\n", h_dd[i], h_rank[i]);
+  }
+  cudaDeviceSynchronize();
   thrust::stable_sort_by_key(d_segments.begin(), d_segments.end(), d_result2.begin());
 
   cudaDeviceSynchronize();
+
+  
 
   float *hd_data= (float *) malloc(sizeof(float)*DSIZE*NSORTS);
   float *raw_ptr = thrust::raw_pointer_cast(d_result2.data());
