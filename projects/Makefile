@@ -1,5 +1,7 @@
 NVCC=nvcc
 cufft:
-	$(NVCC) -std=c++11 -arch=sm_20 -lcufft -lcurand -I ./inc/ surr_ft.cu -o surr_ft.o 
+	$(NVCC) -std=c++11 -arch=sm_30 -lcufft -lcurand -I ./inc/ surr_ft.cu -o surr_ft.o 
 clean:
-	rm *.o	
+	rm *.o
+curand:
+	$(NVCC) -std=c++11 -arch=sm_30 sort2d.cu -o sort2d.o	

@@ -10,6 +10,7 @@
 #include <thrust/transform.h>
 #include <thrust/functional.h>
 #include <thrust/device_ptr.h>
+#include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
 
 #include <helper_cuda.h>
@@ -157,7 +158,8 @@ void phaseran(float *result, const int data_num, const int time_size){
 	checkCudaErrors(cudaMemcpy(d_input, result, sizeof(float)*data_size, cudaMemcpyHostToDevice));
 	
 	real2cufft_trans<<<(data_size+NBLK-1)/NBLK, NBLK>>>(d_signal, d_input, data_size);
-	
+	cudaDeviceSynchronize();
+
 	//cufft
 	cufftHandle plan_r, plan;
 	
@@ -179,6 +181,7 @@ void phaseran(float *result, const int data_num, const int time_size){
 	checkCudaErrors(cudaMalloc(&d_mag, sizeof(float)*data_size));
 
 	fft_polar_angle<<<(data_size+NBLK-1)/NBLK, NBLK>>>(d_signal, d_angle, d_mag, data_size);
+	cudaDeviceSynchronize();
 
 	checkCudaErrors(cudaFree(d_signal));
 
@@ -198,7 +201,7 @@ void phaseran(float *result, const int data_num, const int time_size){
 		curandGenerateUniform(gen, d_ran_series, half_minus_one_size);
 
 		even_surr_trans<<<(data_size+NBLK-1)/NBLK, NBLK>>>(d_angle, d_mag, d_ran_series, data_size, time_size, half_col_size);
-	
+		
 	}else{		
 		
 		//assign half 
@@ -210,6 +213,7 @@ void phaseran(float *result, const int data_num, const int time_size){
 		// do column vector trans p(2:N)=[p1 -flipud(p1)];
 		odd_surr_trans<<<(data_size+NBLK-1)/NBLK, NBLK>>>(d_angle, d_ran_series, data_size, time_size, half_col_size);
 	}
+	cudaDeviceSynchronize();
 
 	checkCudaErrors(cudaFree(d_ran_series));
 	curandDestroyGenerator(gen);
@@ -219,6 +223,7 @@ void phaseran(float *result, const int data_num, const int time_size){
 	checkCudaErrors(cudaMalloc((void **) &d_i_mul, mem_size));
 	
 	i_mul_trans<<<(data_size+NBLK-1)/NBLK, NBLK>>>(d_i_mul, d_mag, d_angle, data_size);
+	cudaDeviceSynchronize();
 
 	// backward transform
 	// printf("---Inverse fft transform --- \n");
@@ -228,7 +233,8 @@ void phaseran(float *result, const int data_num, const int time_size){
 	checkCudaErrors(cudaMalloc(&d_result, sizeof(float)*data_size));
 
 	get_real_trans<<<(data_size+NBLK-1)/NBLK, NBLK>>>(d_result, d_i_mul, data_size, time_size);
-	
+	cudaDeviceSynchronize();
+
 	checkCudaErrors(cudaMemcpy(result, d_result, sizeof(float)*data_size, cudaMemcpyDeviceToHost));
 	
 	cufftDestroy(plan);
@@ -241,31 +247,59 @@ void phaseran(float *result, const int data_num, const int time_size){
 	return;
 }
 
-// sort self-defined function
-// struct col_sort_functor{
-// 	/* data */
-// 	int viewers, randomNum;
-// 	float *data;
-// 	col_sort_functor(int _viewers, int _randomNum, float *_data) : viewers(_viewers), randomNum(_randomNum), data(_data){} 
-
-// 	__host__ __device__
-// };
 // sort by time points
+// __global__ void thrust_sort(float *data, const int viewers, const int randomNum, const int timePoints){
+// 	int idx = threadIdx.x + blockDim.x*blockIdx.x;
+// 	if(idx >= viewers*randomNum){
+// 		return;
+// 	}
+// 	thrust::sort(thrust::seq, data+idx*timePoints, data+(idx+1)*timePoints);	
+	
+// 	return;
+// }
+int mod_pivot = 0;
+int mod_fuc(){
+	return (mod_pivot++)/SIGSIZE;
+}
+
 void sortData(float *data, const int viewers, const int randomNum, const int timePoints){
-	float *d_tmp_data;
+	// float *d_tmp_data;
 	int total_size = viewers*randomNum*timePoints;
-	checkCudaErrors(cudaMalloc(&d_tmp_data, sizeof(float)*total_size));
-	checkCudaErrors(cudaMemcpy(d_tmp_data, data, sizeof(float)*total_size, cudaMemcpyDeviceToDevice));
+	// checkCudaErrors(cudaMalloc(&d_tmp_data, sizeof(float)*total_size));
+	// checkCudaErrors(cudaMemcpy(d_tmp_data, data, sizeof(float)*total_size, cudaMemcpyDeviceToDevice));
 	
-	thrust::device_ptr<float> data_ptr(data);
-	
-	for(int i = 0 ; i < viewers*randomNum ; i ++){
-		int time_size = timePoints;
-		thrust::sort(data_ptr+i*time_size, data_ptr+(i+1)*time_size);	
-	}
+	// thrust::device_ptr<float> data_ptr(data);
+	// thrust_sort<<<(viewers*randomNum+NBLK-1)/NBLK, NBLK>>>(data, viewers, randomNum, timePoints);
+	// for(int i = 0 ; i < viewers*randomNum ; i ++){
+	// 	int time_size = timePoints;
+	// }
 	// thrust::sort(data_ptr, data_ptr+viewers*randomNum*timePoints, col_sort_functor(viewers, randomNum, data));
 
-	checkCudaErrors(cudaFree(d_tmp_data));
+
+	// sort by key implement
+	//vectorized sort
+	thrust::host_vector<int> h_rank(total_size);
+	thrust::generate(h_rank.begin(), h_rank.end(), mod_fuc);
+  	thrust::device_vector<int> d_rank = h_rank;
+  	thrust::device_ptr<float> d_result = thrust::device_pointer_cast(data);
+  	thrust::device_vector<float> d_ori(d_result, d_result+total_size);
+  	thrust::device_vector<float> d_v_result(d_result, d_result+total_size);
+  	  
+  	thrust::stable_sort_by_key(d_v_result.begin(), d_v_result.end(), d_rank.begin());
+  	thrust::stable_sort_by_key(d_rank.begin(), d_rank.end(), d_v_result.begin());
+  	cudaDeviceSynchronize();
+
+  	float *raw_ptr = thrust::raw_pointer_cast(d_v_result.data());
+  	checkCudaErrors(cudaMemcpy(data, raw_ptr, total_size*sizeof(float), cudaMemcpyDeviceToDevice));
+	
+	// thrust::host_vector<float> h_sort = d_v_result;
+	// thrust::host_vector<float> h_data = d_ori;
+	// for(int i = 0;i < total_size; i++){
+	// 	if(i%timePoints == 0){
+	// 		printf("-------\n");
+	// 	}
+	// 	printf("raw: %f sorted: %f \n", h_data[i], h_sort[i]);
+	// } 
 	return;
 }
 
@@ -302,7 +336,11 @@ int main(int argc, char **argv)
 	for(int i = 0; i <1 ; i++){
 
 		for(int i = 0; i<viewers*SIGSIZE*SIGDIM;i++){
-			result[i] = i;
+			// if(i%SIGSIZE==0){
+			// 	printf("---data %d:----\n", i/SIGSIZE);
+			// }
+			result[i] = (double) rand()/RAND_MAX;
+			// printf("rand: %f\n", result[i]);
 		}
 		double *d_result;
 		cudaMalloc(&d_result, sizeof(double)*viewers*SIGSIZE*SIGDIM);
@@ -315,6 +353,13 @@ int main(int argc, char **argv)
 		// sortData(d_result, viewers, SIGDIM, SIGSIZE);
 		cudaMemcpy(result, d_result, sizeof(double)*viewers*SIGSIZE*SIGDIM, cudaMemcpyDeviceToHost);
 
+		// for(int i = 0; i <viewers*SIGSIZE*SIGDIM;i++){
+		// 	if(i%SIGSIZE==0){
+		// 		printf("---!!data %d:----\n", i/SIGSIZE);
+		// 	}
+		// 	printf("sorted:%f \n", result[i]);
+		// }
+		
 		cudaFree(d_result);
 		cudaFree(db_result);
 		
