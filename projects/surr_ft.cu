@@ -18,7 +18,7 @@
 #include <cufft.h>
 #include <curand.h>
 
-#define SIGSIZE 439
+#define SIGSIZE 10
 #define SIGDIM 10000
 #define NBLK 256
 #define TIMESLOT 439
@@ -47,7 +47,6 @@ __global__ void odd_surr_trans(float *angle, float *ran, int data_size, int sig_
 		return;
 	}
 	
-
 	int data_col = idx/sig_size;
 	int data_idx = idx%sig_size;
 	// p(1) is not necessary for changing
@@ -299,6 +298,12 @@ struct sort_int2{
 		return (lhs.x < rhs.x);  
 	}
 };
+
+struct sort_2d_rank{
+	__host__ __device__ bool operator()(const int2 &lhs, const int2 &rhs) const{
+		return (lhs.x < rhs.x) || ((lhs.x == rhs.x) && (lhs.y < rhs.y));
+	}
+};
 struct trans_1d{
 	__host__ __device__ int operator()(const int2 &x) const{
 		return x.y;
@@ -317,6 +322,19 @@ struct trans_2d{
 		return temp;
 	}
 };
+
+struct rank_2d_trans{
+	int timePoints;
+	rank_2d_trans(int _timePoints) : timePoints(_timePoints){}
+
+	__host__ __device__ int2 operator()(const int &ran_idx, const int &rank_idx) const{
+		int rand_pivot = ran_idx/timePoints;
+		int2 temp = make_int2(rand_pivot, rank_idx);
+
+		return temp;
+	}
+};
+
 // get sort rank in *rank
 template<class DataType>
 void getSortRank(int *rank, DataType *data, const int viewers, const int randomNum, const int timePoints){
@@ -361,12 +379,51 @@ void getSortRank(int *rank, DataType *data, const int viewers, const int randomN
   	return;
 }
 
+// sort data by given ranks
+template<class DataType>
+void sortByRank(DataType *data, int *rank, const int viewers, const int randomNum, const int timePoints){
+	int total_size = viewers*randomNum*timePoints;
+	thrust::device_vector<int> d_random_idx(total_size);
+	thrust::sequence(d_random_idx.begin(), d_random_idx.end());
+	
+	thrust::device_ptr<int> rank_ptr(rank);
+	thrust::device_vector<int> rank_vec(rank_ptr, rank_ptr+total_size);
+
+	// construct 2d int2 (ran_idx, rank)
+	thrust::device_vector<int2> int2_rank_vec(total_size);
+	thrust::transform(d_random_idx.begin(), d_random_idx.end(), rank_vec.begin(), int2_rank_vec.begin(), rank_2d_trans(timePoints));
+
+	// data to thrust vector
+	thrust::device_ptr<DataType> data_ptr = thrust::device_pointer_cast(data);;
+	thrust::device_vector<DataType> d_data_vec(data_ptr, data_ptr+total_size);
+
+	thrust::stable_sort_by_key(int2_rank_vec.begin(), int2_rank_vec.end(), d_data_vec.begin(), sort_2d_rank());
+
+	// test for correctness
+	// thrust::host_vector<DataType> h_data_vec=d_data_vec;
+	// thrust::device_ptr<DataType> odata_ptr = thrust::device_pointer_cast(data);;
+	// thrust::device_vector<DataType> od_data_vec(odata_ptr, odata_ptr+total_size);
+	// thrust::host_vector<DataType> oh_data_vec = od_data_vec;
+	// thrust::host_vector<int> h_rank = rank_vec;
+
+	// for(int i = 0 ; i< 2*timePoints; i++){
+	// 	if(i%timePoints==0){
+	// 		printf("-------\n");
+	// 	}
+	// 	printf("ori: %1f rank: %d sort: %1f \n", oh_data_vec[i], h_rank[i], h_data_vec[i]);
+	// }
+
+	checkCudaErrors(cudaMemcpy(data, d_data_vec.data().get(), sizeof(DataType)*total_size, cudaMemcpyDeviceToDevice));
+
+	return;
+}
+
 // aaft : cudaPointer return value
 // data : cudaPointer input data subjects (with several viewers)
 // viewers : # of viewers in data
 // randomNum : # of random series
 // timePoints :  # of time slots
-void amplitudeAdjustedFourierTransform(double *d_aaft, const double *d_data, const int viewers, const int randomNum, const int timePoints) {
+void amplitudeAdjustedFourierTransform(double *d_aaft, double *d_data, const int viewers, const int randomNum, const int timePoints) {
 	// generate normal random variables
 	generator_time_points = timePoints;
 	int total_size = viewers*randomNum*timePoints;
@@ -384,7 +441,8 @@ void amplitudeAdjustedFourierTransform(double *d_aaft, const double *d_data, con
 	checkCudaErrors(cudaMalloc(&d_rank, sizeof(int)*total_size));
 
 	getSortRank(d_rank, d_normal, viewers, randomNum, timePoints);
-	
+	sortByRank(d_data, d_rank, viewers, randomNum, timePoints);
+
 	checkCudaErrors(cudaFree(d_normal));
 	checkCudaErrors(cudaFree(d_rank));
 	return;
